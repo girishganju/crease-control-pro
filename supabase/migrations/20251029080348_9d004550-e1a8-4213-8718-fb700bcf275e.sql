@@ -1,5 +1,13 @@
--- Create profiles table for user information
-CREATE TABLE public.profiles (
+-- ============================================================
+-- Enable UUID generation
+-- ============================================================
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- ============================================================
+-- PROFILES TABLE
+-- ============================================================
+CREATE TABLE IF NOT EXISTS public.profiles (
   id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   full_name TEXT,
   avatar_url TEXT,
@@ -22,8 +30,10 @@ CREATE POLICY "Users can insert their own profile"
   ON public.profiles FOR INSERT
   WITH CHECK (auth.uid() = id);
 
--- Create tournaments table
-CREATE TABLE public.tournaments (
+-- ============================================================
+-- TOURNAMENTS TABLE
+-- ============================================================
+CREATE TABLE IF NOT EXISTS public.tournaments (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name TEXT NOT NULL,
   description TEXT,
@@ -53,13 +63,16 @@ CREATE POLICY "Tournament creators can delete their tournaments"
   ON public.tournaments FOR DELETE
   USING (auth.uid() = created_by);
 
--- Create teams table
-CREATE TABLE public.teams (
+-- ============================================================
+-- TEAMS TABLE
+-- ============================================================
+CREATE TABLE IF NOT EXISTS public.teams (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   tournament_id UUID REFERENCES public.tournaments(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   logo_url TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 ALTER TABLE public.teams ENABLE ROW LEVEL SECURITY;
@@ -80,14 +93,20 @@ CREATE POLICY "Users can delete teams"
   ON public.teams FOR DELETE
   USING (auth.uid() IS NOT NULL);
 
--- Create players table
-CREATE TABLE public.players (
+CREATE INDEX IF NOT EXISTS idx_teams_tournament_id ON public.teams (tournament_id);
+
+-- ============================================================
+-- PLAYERS TABLE
+-- ============================================================
+CREATE TABLE IF NOT EXISTS public.players (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   team_id UUID REFERENCES public.teams(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   role TEXT CHECK (role IN ('batsman', 'bowler', 'all-rounder', 'wicket-keeper')),
   avatar_url TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  CONSTRAINT unique_player_name_per_team UNIQUE (team_id, name)
 );
 
 ALTER TABLE public.players ENABLE ROW LEVEL SECURITY;
@@ -100,8 +119,12 @@ CREATE POLICY "Authenticated users can manage players"
   ON public.players FOR ALL
   USING (auth.uid() IS NOT NULL);
 
--- Create matches table
-CREATE TABLE public.matches (
+CREATE INDEX IF NOT EXISTS idx_players_team_id ON public.players (team_id);
+
+-- ============================================================
+-- MATCHES TABLE
+-- ============================================================
+CREATE TABLE IF NOT EXISTS public.matches (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   tournament_id UUID REFERENCES public.tournaments(id) ON DELETE CASCADE,
   team1_id UUID REFERENCES public.teams(id),
@@ -112,7 +135,8 @@ CREATE TABLE public.matches (
   winner_team_id UUID REFERENCES public.teams(id),
   team1_score TEXT,
   team2_score TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 ALTER TABLE public.matches ENABLE ROW LEVEL SECURITY;
@@ -125,8 +149,14 @@ CREATE POLICY "Authenticated users can manage matches"
   ON public.matches FOR ALL
   USING (auth.uid() IS NOT NULL);
 
--- Create player statistics table
-CREATE TABLE public.player_stats (
+CREATE INDEX IF NOT EXISTS idx_matches_tournament_id ON public.matches (tournament_id);
+CREATE INDEX IF NOT EXISTS idx_matches_team1_id ON public.matches (team1_id);
+CREATE INDEX IF NOT EXISTS idx_matches_team2_id ON public.matches (team2_id);
+
+-- ============================================================
+-- PLAYER STATS TABLE
+-- ============================================================
+CREATE TABLE IF NOT EXISTS public.player_stats (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   player_id UUID REFERENCES public.players(id) ON DELETE CASCADE,
   tournament_id UUID REFERENCES public.tournaments(id) ON DELETE CASCADE,
@@ -135,6 +165,7 @@ CREATE TABLE public.player_stats (
   wickets_taken INT DEFAULT 0,
   catches INT DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(player_id, tournament_id)
 );
 
@@ -148,7 +179,11 @@ CREATE POLICY "Authenticated users can manage player stats"
   ON public.player_stats FOR ALL
   USING (auth.uid() IS NOT NULL);
 
--- Create trigger function for updated_at
+CREATE INDEX IF NOT EXISTS idx_player_stats_player_id ON public.player_stats (player_id);
+
+-- ============================================================
+-- TRIGGERS: HANDLE UPDATED_AT
+-- ============================================================
 CREATE OR REPLACE FUNCTION public.handle_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -157,7 +192,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Create triggers
 CREATE TRIGGER update_profiles_updated_at
   BEFORE UPDATE ON public.profiles
   FOR EACH ROW
@@ -168,7 +202,29 @@ CREATE TRIGGER update_tournaments_updated_at
   FOR EACH ROW
   EXECUTE FUNCTION public.handle_updated_at();
 
--- Create function to handle new user profile creation
+CREATE TRIGGER update_teams_updated_at
+  BEFORE UPDATE ON public.teams
+  FOR EACH ROW
+  EXECUTE FUNCTION public.handle_updated_at();
+
+CREATE TRIGGER update_players_updated_at
+  BEFORE UPDATE ON public.players
+  FOR EACH ROW
+  EXECUTE FUNCTION public.handle_updated_at();
+
+CREATE TRIGGER update_matches_updated_at
+  BEFORE UPDATE ON public.matches
+  FOR EACH ROW
+  EXECUTE FUNCTION public.handle_updated_at();
+
+CREATE TRIGGER update_player_stats_updated_at
+  BEFORE UPDATE ON public.player_stats
+  FOR EACH ROW
+  EXECUTE FUNCTION public.handle_updated_at();
+
+-- ============================================================
+-- FUNCTION: HANDLE NEW USER (CREATE PROFILE)
+-- ============================================================
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -182,8 +238,36 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
--- Create trigger for new user
 CREATE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW
   EXECUTE FUNCTION public.handle_new_user();
+
+-- ============================================================
+-- FUNCTION: AUTO UPDATE TOURNAMENT STATUS BASED ON MATCHES
+-- ============================================================
+CREATE OR REPLACE FUNCTION public.update_tournament_status()
+RETURNS TRIGGER AS $$
+DECLARE
+  total_matches INT;
+  completed_matches INT;
+BEGIN
+  SELECT COUNT(*) INTO total_matches FROM public.matches WHERE tournament_id = NEW.tournament_id;
+  SELECT COUNT(*) INTO completed_matches FROM public.matches WHERE tournament_id = NEW.tournament_id AND status = 'completed';
+
+  IF completed_matches = 0 THEN
+    UPDATE public.tournaments SET status = 'live' WHERE id = NEW.tournament_id AND status = 'upcoming';
+  ELSIF completed_matches = total_matches THEN
+    UPDATE public.tournaments SET status = 'completed' WHERE id = NEW.tournament_id;
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trigger_update_tournament_status ON public.matches;
+
+CREATE TRIGGER trigger_update_tournament_status
+AFTER INSERT OR UPDATE ON public.matches
+FOR EACH ROW
+EXECUTE FUNCTION public.update_tournament_status();

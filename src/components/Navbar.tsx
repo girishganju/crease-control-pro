@@ -26,7 +26,7 @@ export const Navbar = ({ user }: NavbarProps) => {
         <Link to="/" className="flex items-center gap-2 font-semibold text-xl">
           <Trophy className="h-6 w-6 text-primary" />
           <span className="bg-gradient-primary bg-clip-text text-transparent">
-            CricketPro
+           Cric.in
           </span>
         </Link>
 

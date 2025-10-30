@@ -75,7 +75,7 @@ const Dashboard = () => {
           />
           <div className="relative z-10">
             <h1 className="text-4xl md:text-5xl font-bold text-white mb-4">
-              Welcome to CricketPro
+              Lets Play Together
             </h1>
             <p className="text-white/90 text-lg mb-6 max-w-2xl">
               Manage tournaments, track scores, and celebrate cricket excellence.
@@ -126,7 +126,17 @@ const Dashboard = () => {
             </CardContent>
           </Card>
         </div>
-
+         <Card className="shadow-card hover:shadow-elevated transition-shadow">
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle className="text-sm font-medium">Player Status</CardTitle>
+              <Calendar className="h-4 w-4 text-primary" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">0</div>
+              <p className="text-xs text-muted-foreground">Explore Now</p>
+            </CardContent>
+          </Card>
+    
         <Card className="shadow-card">
           <CardHeader>
             <div className="flex items-center justify-between">

@@ -102,7 +102,7 @@ const Auth = () => {
             <div className="flex justify-center mb-4">
               <Trophy className="h-12 w-12 text-primary" />
             </div>
-            <CardTitle className="text-3xl font-bold">Welcome to CricketPro</CardTitle>
+            <CardTitle className="text-3xl font-bold">Welcome to Cricket</CardTitle>
             <CardDescription>Manage your cricket tournaments with ease</CardDescription>
           </CardHeader>
           <CardContent>
